@@ -30,4 +30,14 @@
 
 ---
 
+## Se implementaron 3 archivos nuevos llamados LoginViewModelSimpleTest, SignupViewModelSimpleTest y HomeViewModelSimpleTest. Todos en la carpeta test a un lado de la carpeta java para correr las pruebas JUnit.
+
+---
+
+## Se expandio la arquitectura de la app para usar retrofit y aislar los errores en modulos interdependientes.
+
+---
+
+## Se implemento un servidor escrito en Java y levantado con Spring Boot en la plataforma Railway y esta perfectamente operativa en un servidor, con direccion url, y siendo invocada como api y micro servicio externo a la app Booksy.
+
 # Autor: Clemente Garreton

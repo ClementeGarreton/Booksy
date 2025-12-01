@@ -13,19 +13,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.rememberAsyncImagePainter
 import com.example.booksy.AppDependencies
 import com.example.booksy.data.Book
+import com.example.booksy.data.RemoteBook
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onLogout: () -> Unit,
-    goProfile: () -> Unit   // 👈 agregado
+    goProfile: () -> Unit
 ) {
     val ctx = LocalContext.current
     val dao = remember { AppDependencies.db.bookDao() }
@@ -62,9 +63,7 @@ fun HomeScreen(
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("Booksy — Home") },
-                actions = {
-                    TextButton(onClick = goProfile) { Text("Perfil") } // 👈 botón a Profile
-                }
+                actions = { TextButton(onClick = goProfile) { Text("Perfil") } }
             )
         }
     ) { p ->
@@ -75,6 +74,8 @@ fun HomeScreen(
                 .padding(vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+
+            // Header
             Column(Modifier.padding(horizontal = 24.dp)) {
                 Text("¡Sesión iniciada!", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 if (!email.isNullOrBlank()) Text("Bienvenido, $email")
@@ -82,49 +83,134 @@ fun HomeScreen(
                 Text("Tu biblioteca persiste por usuario (SQLite).", fontSize = 13.sp)
             }
 
-            val catalog = remember {
-                listOf(
-                    BookCard("El Hobbit", "J. R. R. Tolkien", "book_hobbit"),
-                    BookCard("1984", "George Orwell", "book_1984"),
-                    BookCard("Dune", "Frank Herbert", "book_dune"),
-                    BookCard("Fahrenheit 451", "Ray Bradbury", "book_f451"),
-                    BookCard("Naked Lunch", "William Burroughs", "book_naked_lunch")
-                )
+            // ========================
+            // REMOTE BOOK CATALOG WITH FILTERS
+            // ========================
+            var remoteBooks by remember { mutableStateOf<List<RemoteBook>>(emptyList()) }
+            var allRemoteBooks by remember { mutableStateOf<List<RemoteBook>>(emptyList()) }
+            var loadingCatalog by remember { mutableStateOf(true) }
+            var selectedGenre by remember { mutableStateOf<String?>(null) }
+            var availableGenres by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+            LaunchedEffect(Unit) {
+                try {
+                    val books = AppDependencies.bookService.getCatalog()
+                    allRemoteBooks = books
+                    remoteBooks = books
+                    availableGenres = books.map { it.genre }.toSet()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    loadingCatalog = false
+                }
             }
-            CatalogRow(books = catalog)
+
+            if (loadingCatalog) {
+                CircularProgressIndicator(Modifier.padding(16.dp))
+            } else {
+                Column {
+                    // Genre filter chips
+                    Text(
+                        "Catálogo de libros",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedGenre == null,
+                                onClick = {
+                                    selectedGenre = null
+                                    remoteBooks = allRemoteBooks
+                                },
+                                label = { Text("Todos") }
+                            )
+                        }
+                        items(availableGenres.sorted()) { genre ->
+                            FilterChip(
+                                selected = selectedGenre == genre,
+                                onClick = {
+                                    selectedGenre = genre
+                                    remoteBooks = allRemoteBooks.filter { it.genre == genre }
+                                },
+                                label = { Text(genre) }
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+                    RemoteCatalogRow(books = remoteBooks)
+                }
+            }
 
             HorizontalDivider()
 
+            // ========================
+            // ADD BOOK LOCAL
+            // ========================
             Column(Modifier.padding(horizontal = 24.dp)) {
                 Text("Agregar libro a tu cuenta", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(value = title, onValueChange = { title = it }, label = { Text("Título") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it },
+                    label = { Text("Título") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(value = author, onValueChange = { author = it }, label = { Text("Autor") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+
+                OutlinedTextField(
+                    value = author,
+                    onValueChange = { author = it },
+                    label = { Text("Autor") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = {
-                        if (title.isBlank() || author.isBlank()) { error = "Completa título y autor"; return@Button }
+                        if (title.isBlank() || author.isBlank()) {
+                            error = "Completa título y autor"
+                            return@Button
+                        }
                         scope.launch {
                             dao.insert(Book(userId = userId!!, title = title.trim(), author = author.trim()))
                             savedBooks = dao.getAll(userId!!)
-                            title = ""; author = ""; error = null
+                            title = ""
+                            author = ""
+                            error = null
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Agregar a mi cuenta") }
 
-                error?.let { Spacer(Modifier.height(6.dp)); Text(it, color = MaterialTheme.colorScheme.error) }
+                error?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error)
+                }
             }
 
+            // ========================
+            // LOCAL BOOK LIST
+            // ========================
             LazyColumn(
                 modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(savedBooks, key = { it.id }) { b ->
                     ElevatedCard(Modifier.fillMaxWidth()) {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Column(Modifier.weight(1f)) {
                                 Text(b.title, style = MaterialTheme.typography.titleSmall)
                                 Text(b.author, style = MaterialTheme.typography.bodySmall)
@@ -140,6 +226,9 @@ fun HomeScreen(
                 }
             }
 
+            // ========================
+            // LOGOUT BUTTON
+            // ========================
             Row(Modifier.padding(horizontal = 24.dp)) {
                 OutlinedButton(
                     onClick = {
@@ -155,28 +244,62 @@ fun HomeScreen(
     }
 }
 
-data class BookCard(val title: String, val author: String, val coverName: String)
 
+// ======================================
+// REMOTE CATALOG ROW
+// ======================================
 @Composable
-fun CatalogRow(books: List<BookCard>) {
-    val context = LocalContext.current
-    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+fun RemoteCatalogRow(books: List<RemoteBook>) {
+    if (books.isEmpty()) {
+        Text(
+            "No hay libros en este género",
+            modifier = Modifier.padding(horizontal = 24.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         items(books) { book ->
-            ElevatedCard(shape = RoundedCornerShape(16.dp), modifier = Modifier.width(160.dp).height(260.dp)) {
-                val resId = remember(book.coverName) {
-                    context.resources.getIdentifier(book.coverName, "drawable", context.packageName)
-                }
-                val painter = if (resId != 0) painterResource(id = resId) else painterResource(id = android.R.drawable.ic_menu_report_image)
-                Image(
-                    painter = painter,
-                    contentDescription = book.title,
-                    modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)),
-                    contentScale = ContentScale.Crop
-                )
-                Column(Modifier.padding(12.dp)) {
-                    Text(book.title, style = MaterialTheme.typography.titleSmall, maxLines = 1)
-                    Spacer(Modifier.height(4.dp))
-                    Text(book.author, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            ElevatedCard(
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .width(160.dp)
+                    .height(280.dp)
+            ) {
+                Column {
+                    Image(
+                        painter = rememberAsyncImagePainter(book.imageUrl),
+                        contentDescription = book.title,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            book.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 2
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            book.author,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            book.genre,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }
