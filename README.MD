@@ -40,4 +40,8 @@
 
 ## Se implemento un servidor escrito en Java y levantado con Spring Boot en la plataforma Railway y esta perfectamente operativa en un servidor, con direccion url, y siendo invocada como api y micro servicio externo a la app Booksy.
 
+---
+
+## Se implemento un filtro de generos literarios y tambien una barra de busqueda por nombre o autor
+
 # Autor: Clemente Garreton

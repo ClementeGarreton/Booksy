@@ -16,45 +16,36 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.rememberAsyncImagePainter
-import com.example.booksy.AppDependencies
 import com.example.booksy.data.Book
 import com.example.booksy.data.RemoteBook
+import com.example.booksy.viewmodel.HomeViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onLogout: () -> Unit,
-    goProfile: () -> Unit
+    goProfile: () -> Unit,
+    vm: HomeViewModel = viewModel()
 ) {
     val ctx = LocalContext.current
-    val dao = remember { AppDependencies.db.bookDao() }
+    val ui by vm.ui.collectAsState()
     val scope = rememberCoroutineScope()
 
-    var userId by remember { mutableStateOf<Long?>(null) }
-    var email by remember { mutableStateOf<String?>(null) }
-    var savedBooks by remember { mutableStateOf<List<Book>>(emptyList()) }
-    var title by remember { mutableStateOf("") }
-    var author by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
-
     LaunchedEffect(Unit) {
-        userId = AppDependencies.session.loadUserId()
-        email = AppDependencies.session.loadUserEmail()
-        userId?.let { savedBooks = dao.getAll(it) }
-        loading = false
+        vm.load(ctx)
     }
 
-    if (loading) {
+    if (ui.loading) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
         return
     }
 
-    if (userId == null) {
+    if (!ui.hasSession) {
         Text("No hay sesión iniciada", Modifier.padding(16.dp))
         return
     }
@@ -67,192 +58,184 @@ fun HomeScreen(
             )
         }
     ) { p ->
-        Column(
-            Modifier
+        LazyColumn(
+            modifier = Modifier
                 .fillMaxSize()
-                .padding(p)
-                .padding(vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(p),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(vertical = 12.dp)
         ) {
 
-            // Header
-            Column(Modifier.padding(horizontal = 24.dp)) {
-                Text("¡Sesión iniciada!", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                if (!email.isNullOrBlank()) Text("Bienvenido, $email")
-                Spacer(Modifier.height(8.dp))
-                Text("Tu biblioteca persiste por usuario (SQLite).", fontSize = 13.sp)
-            }
-
-            // ========================
-            // REMOTE BOOK CATALOG WITH FILTERS
-            // ========================
-            var remoteBooks by remember { mutableStateOf<List<RemoteBook>>(emptyList()) }
-            var allRemoteBooks by remember { mutableStateOf<List<RemoteBook>>(emptyList()) }
-            var loadingCatalog by remember { mutableStateOf(true) }
-            var selectedGenre by remember { mutableStateOf<String?>(null) }
-            var availableGenres by remember { mutableStateOf<Set<String>>(emptySet()) }
-
-            LaunchedEffect(Unit) {
-                try {
-                    val books = AppDependencies.bookService.getCatalog()
-                    allRemoteBooks = books
-                    remoteBooks = books
-                    availableGenres = books.map { it.genre }.toSet()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                } finally {
-                    loadingCatalog = false
+            // HEADER
+            item {
+                Column(Modifier.padding(horizontal = 24.dp)) {
+                    Text(
+                        "¡Sesión iniciada!",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    ui.email?.let {
+                        Text("Bienvenido, $it")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Tu biblioteca persiste por usuario (SQLite).",
+                        fontSize = 13.sp
+                    )
                 }
             }
 
-            if (loadingCatalog) {
-                CircularProgressIndicator(Modifier.padding(16.dp))
-            } else {
-                Column {
-                    // Genre filter chips
-                    Text(
-                        "Catálogo de libros",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 24.dp)
-                    )
-                    Spacer(Modifier.height(8.dp))
+            // BARRA DE BÚSQUEDA (remoto)
+            item {
+                OutlinedTextField(
+                    value = ui.searchQuery,
+                    onValueChange = { vm.setSearchQuery(it) },
+                    label = { Text("Buscar por título o autor") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp)
+                )
+            }
 
+            // CHIPS DE GÉNERO
+            item {
+                if (ui.availableGenres.isNotEmpty()) {
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         item {
                             FilterChip(
-                                selected = selectedGenre == null,
-                                onClick = {
-                                    selectedGenre = null
-                                    remoteBooks = allRemoteBooks
-                                },
+                                selected = ui.selectedGenre == null,
+                                onClick = { vm.setSelectedGenre(null) },
                                 label = { Text("Todos") }
                             )
                         }
-                        items(availableGenres.sorted()) { genre ->
+                        items(ui.availableGenres.sorted()) { genre ->
                             FilterChip(
-                                selected = selectedGenre == genre,
-                                onClick = {
-                                    selectedGenre = genre
-                                    remoteBooks = allRemoteBooks.filter { it.genre == genre }
-                                },
+                                selected = ui.selectedGenre == genre,
+                                onClick = { vm.setSelectedGenre(genre) },
                                 label = { Text(genre) }
                             )
                         }
                     }
-
-                    Spacer(Modifier.height(12.dp))
-                    RemoteCatalogRow(books = remoteBooks)
                 }
             }
 
-            HorizontalDivider()
+            // CATÁLOGO REMOTO FILTRADO
+            item {
+                if (ui.loadingCatalog) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else {
+                    Column {
+                        Text(
+                            "Catálogo de libros",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+                        Spacer(Modifier.height(8.dp))
 
-            // ========================
-            // ADD BOOK LOCAL
-            // ========================
-            Column(Modifier.padding(horizontal = 24.dp)) {
-                Text("Agregar libro a tu cuenta", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
-
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Título") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-
-                OutlinedTextField(
-                    value = author,
-                    onValueChange = { author = it },
-                    label = { Text("Autor") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        if (title.isBlank() || author.isBlank()) {
-                            error = "Completa título y autor"
-                            return@Button
-                        }
-                        scope.launch {
-                            dao.insert(Book(userId = userId!!, title = title.trim(), author = author.trim()))
-                            savedBooks = dao.getAll(userId!!)
-                            title = ""
-                            author = ""
-                            error = null
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Agregar a mi cuenta") }
-
-                error?.let {
-                    Spacer(Modifier.height(6.dp))
-                    Text(it, color = MaterialTheme.colorScheme.error)
+                        RemoteCatalogRow(books = ui.filteredRemoteBooks)
+                    }
                 }
             }
 
-            // ========================
-            // LOCAL BOOK LIST
-            // ========================
-            LazyColumn(
-                modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(savedBooks, key = { it.id }) { b ->
-                    ElevatedCard(Modifier.fillMaxWidth()) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(b.title, style = MaterialTheme.typography.titleSmall)
-                                Text(b.author, style = MaterialTheme.typography.bodySmall)
-                            }
-                            OutlinedButton(onClick = {
-                                scope.launch {
-                                    dao.delete(b)
-                                    savedBooks = dao.getAll(userId!!)
-                                }
-                            }) { Text("Eliminar") }
+            item {
+                HorizontalDivider()
+            }
+
+            // FORMULARIO: AGREGAR LIBRO LOCAL
+            item {
+                Column(Modifier.padding(horizontal = 24.dp)) {
+                    Text("Agregar libro a tu cuenta", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = ui.title,
+                        onValueChange = { vm.setTitle(it) },
+                        label = { Text("Título") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = ui.author,
+                        onValueChange = { vm.setAuthor(it) },
+                        label = { Text("Autor") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { vm.add(ctx) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Agregar a mi cuenta") }
+
+                    ui.error?.let {
+                        Spacer(Modifier.height(6.dp))
+                        Text(it, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+
+            // LISTA LOCAL
+            items(ui.books, key = { it.id }) { b: Book ->
+                ElevatedCard(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(b.title, style = MaterialTheme.typography.titleSmall)
+                            Text(b.author, style = MaterialTheme.typography.bodySmall)
+                        }
+                        OutlinedButton(onClick = { vm.delete(ctx, b) }) {
+                            Text("Eliminar")
                         }
                     }
                 }
             }
 
-            // ========================
-            // LOGOUT BUTTON
-            // ========================
-            Row(Modifier.padding(horizontal = 24.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            AppDependencies.session.clear()
-                            onLogout()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Cerrar sesión") }
+            // LOGOUT
+            item {
+                Row(Modifier.padding(horizontal = 24.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                vm.logout(ctx)
+                                onLogout()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Cerrar sesión") }
+                }
             }
         }
     }
 }
 
-
-// ======================================
-// REMOTE CATALOG ROW
-// ======================================
+// CARRUSEL REMOTO
 @Composable
 fun RemoteCatalogRow(books: List<RemoteBook>) {
     if (books.isEmpty()) {
         Text(
-            "No hay libros en este género",
+            "No hay libros que coincidan con la búsqueda",
             modifier = Modifier.padding(horizontal = 24.dp),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
